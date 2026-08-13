@@ -21,11 +21,51 @@ def _get_secret_value(name):
         return ""
 
 
-def _get_database_url():
-    value = os.getenv("DATABASE_URL", "").strip()
+def _get_config_value(name):
+    """Read a database setting from process environment first, then Streamlit Secrets."""
+    value = os.getenv(name, "").strip()
     if value:
         return value
-    return _get_secret_value("DATABASE_URL")
+    return _get_secret_value(name)
+
+
+def _get_database_url():
+    """Return DATABASE_URL when supplied. This remains supported for compatibility."""
+    return _get_config_value("DATABASE_URL")
+
+
+def _get_postgresql_config():
+    """
+    Read PostgreSQL connection parameters in the standard Neon/Streamlit format.
+
+    Supported settings:
+        PGHOST
+        PGDATABASE
+        PGUSER
+        PGPASSWORD
+        PGSSLMODE
+        PGCHANNELBINDING
+
+    DATABASE_URL is handled separately and takes precedence.
+    """
+    return {
+        "host": _get_config_value("PGHOST"),
+        "dbname": _get_config_value("PGDATABASE"),
+        "user": _get_config_value("PGUSER"),
+        "password": _get_config_value("PGPASSWORD"),
+        "sslmode": _get_config_value("PGSSLMODE") or "require",
+        "channel_binding": _get_config_value("PGCHANNELBINDING") or "require",
+    }
+
+
+def _has_postgresql_config():
+    database_url = _get_database_url()
+    if database_url:
+        return True
+
+    config = _get_postgresql_config()
+    required = ("host", "dbname", "user", "password")
+    return all(config.get(key) for key in required)
 
 
 def _is_cloud_environment():
@@ -36,15 +76,14 @@ def _is_cloud_environment():
 
 
 def database_backend():
-    database_url = _get_database_url()
-
-    if database_url:
+    if _has_postgresql_config():
         return "postgresql"
 
     if _is_cloud_environment():
         raise RuntimeError(
             "PostgreSQL is not configured for the cloud application. "
-            "Add DATABASE_URL to Streamlit Secrets. "
+            "Add the Neon PostgreSQL settings (PGHOST, PGDATABASE, PGUSER, "
+            "PGPASSWORD, PGSSLMODE and optionally PGCHANNELBINDING) to Streamlit Secrets. "
             "The application has stopped to prevent accidental use of a temporary SQLite database."
         )
 
@@ -60,18 +99,25 @@ class _DBConnection:
             from psycopg2.extras import RealDictCursor
 
             database_url = _get_database_url()
-            if not database_url:
-                raise RuntimeError(
-                    "DATABASE_URL is missing. PostgreSQL is required in cloud mode."
-                )
+            pg_config = _get_postgresql_config()
 
             try:
-                self.conn = psycopg2.connect(database_url)
+                if database_url:
+                    self.conn = psycopg2.connect(database_url)
+                elif _has_postgresql_config():
+                    self.conn = psycopg2.connect(**pg_config)
+                else:
+                    raise RuntimeError(
+                        "PostgreSQL configuration is incomplete. "
+                        "Provide DATABASE_URL or PGHOST, PGDATABASE, PGUSER and PGPASSWORD."
+                    )
+            except RuntimeError:
+                raise
             except Exception as exc:
                 raise RuntimeError(
                     "Unable to connect to PostgreSQL. "
                     "The application did not fall back to SQLite. "
-                    "Check the DATABASE_URL in Streamlit Secrets."
+                    "Check the Neon PostgreSQL settings in Streamlit Secrets."
                 ) from exc
 
             self.conn.autocommit = False
