@@ -55,3 +55,7 @@ The v1.2.0 `init_db()` performs additive schema upgrades. Existing data is retai
 ## Release status
 
 **FROZEN — v1.2.0**
+
+
+## v1.2.1 Database Safety Fix
+Cloud deployments now require PostgreSQL and never silently fall back to SQLite. See DATABASE_SAFETY_FIX_v1.2.1.md.

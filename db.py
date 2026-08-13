@@ -13,30 +13,70 @@ for p in (DATA_DIR, UPLOAD_DIR, INVOICE_DIR):
     p.mkdir(parents=True, exist_ok=True)
 
 
-def _get_database_url():
-    value = os.getenv("DATABASE_URL", "").strip()
-    if value:
-        return value
+def _get_secret_value(name):
     try:
         import streamlit as st
-        return str(st.secrets.get("DATABASE_URL", "")).strip()
+        return str(st.secrets.get(name, "")).strip()
     except Exception:
         return ""
 
 
+def _get_database_url():
+    value = os.getenv("DATABASE_URL", "").strip()
+    if value:
+        return value
+    return _get_secret_value("DATABASE_URL")
+
+
+def _is_cloud_environment():
+    value = os.getenv("GST_BILLING_ENV", "").strip().lower()
+    if value in {"cloud", "production", "prod"}:
+        return True
+    return _get_secret_value("GST_BILLING_ENV").lower() in {"cloud", "production", "prod"}
+
+
 def database_backend():
-    return "postgresql" if _get_database_url() else "sqlite"
+    database_url = _get_database_url()
+
+    if database_url:
+        return "postgresql"
+
+    if _is_cloud_environment():
+        raise RuntimeError(
+            "PostgreSQL is not configured for the cloud application. "
+            "Add DATABASE_URL to Streamlit Secrets. "
+            "The application has stopped to prevent accidental use of a temporary SQLite database."
+        )
+
+    return "sqlite"
 
 
 class _DBConnection:
     def __init__(self):
         self.backend = database_backend()
+
         if self.backend == "postgresql":
             import psycopg2
             from psycopg2.extras import RealDictCursor
-            self.conn = psycopg2.connect(_get_database_url())
+
+            database_url = _get_database_url()
+            if not database_url:
+                raise RuntimeError(
+                    "DATABASE_URL is missing. PostgreSQL is required in cloud mode."
+                )
+
+            try:
+                self.conn = psycopg2.connect(database_url)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Unable to connect to PostgreSQL. "
+                    "The application did not fall back to SQLite. "
+                    "Check the DATABASE_URL in Streamlit Secrets."
+                ) from exc
+
             self.conn.autocommit = False
             self.cursor_factory = RealDictCursor
+
         else:
             self.conn = sqlite3.connect(DB_PATH)
             self.conn.row_factory = sqlite3.Row
@@ -97,7 +137,11 @@ def _active_business_id():
             return int(value)
     except Exception:
         pass
-    return 1
+
+    raise RuntimeError(
+        "No active business is selected. "
+        "Please select a business before continuing."
+    )
 
 
 def get_active_business_id():
