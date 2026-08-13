@@ -128,9 +128,22 @@ class _DBConnection:
             self.conn.row_factory = sqlite3.Row
             self.conn.execute("PRAGMA foreign_keys = ON")
 
+    @staticmethod
+    def _prepare_postgresql_sql(sql):
+        """
+        Convert SQLite-only COLLATE NOCASE syntax before sending SQL to PostgreSQL.
+
+        The application uses COLLATE NOCASE in a few ordering statements for
+        SQLite compatibility. PostgreSQL does not provide a collation named
+        NOCASE, so the clause is removed for PostgreSQL execution. This does
+        not change stored data or business logic.
+        """
+        return sql.replace(" COLLATE NOCASE", "")
+
     def execute(self, sql, params=()):
         if self.backend == "postgresql":
             cur = self.conn.cursor(cursor_factory=self.cursor_factory)
+            sql = self._prepare_postgresql_sql(sql)
             cur.execute(sql.replace("?", "%s"), params)
             return cur
         return self.conn.execute(sql, params)
@@ -138,6 +151,7 @@ class _DBConnection:
     def executemany(self, sql, seq):
         if self.backend == "postgresql":
             cur = self.conn.cursor(cursor_factory=self.cursor_factory)
+            sql = self._prepare_postgresql_sql(sql)
             cur.executemany(sql.replace("?", "%s"), seq)
             return cur
         return self.conn.executemany(sql, seq)
@@ -148,6 +162,7 @@ class _DBConnection:
             for statement in sql.split(";"):
                 statement = statement.strip()
                 if statement:
+                    statement = self._prepare_postgresql_sql(statement)
                     cur.execute(statement)
             return cur
         return self.conn.executescript(sql)
